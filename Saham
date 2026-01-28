@@ -1,0 +1,170 @@
+############################################################
+# ANALISIS RISIKO PORTOFOLIO OPTIMAL
+# SINGLE INDEX MODEL & VAR HISTORICAL SIMULATION
+# DATA: YAHOO FINANCE (2020–2024)
+############################################################
+
+rm(list = ls())
+
+# ==========================================================
+# LIBRARY
+# ==========================================================
+library(quantmod)
+library(tidyverse)
+library(xts)
+library(PerformanceAnalytics)
+library(nortest)
+
+# ==========================================================
+# PARAMETER PENELITIAN
+# ==========================================================
+start_date <- as.Date("2020-01-01")
+end_date   <- as.Date("2024-12-31")
+
+saham <- c("ADRO.JK","ANTM.JK","ASII.JK","BBCA.JK",
+           "BBRI.JK","BBNI.JK","BMRI.JK","TLKM.JK")
+
+market <- "^JKSE"   # IHSG
+
+# ==========================================================
+# AMBIL DATA DARI YAHOO FINANCE
+# ==========================================================
+getSymbols(c(saham, market),
+           src = "yahoo",
+           from = start_date,
+           to   = end_date)
+
+# Ambil closing price
+harga_saham <- do.call(merge, lapply(saham, function(x) Cl(get(x))))
+colnames(harga_saham) <- gsub(".JK","",saham)
+
+harga_IHSG <- Cl(get(market))
+
+# Gabungkan
+harga <- merge(harga_saham, IHSG = harga_IHSG)
+harga <- na.omit(harga)
+
+############################################################
+# 3.1 STATISTIKA DESKRIPTIF (TABEL 1)
+############################################################
+stat_deskriptif <- data.frame(
+  Saham    = colnames(harga)[-ncol(harga)],
+  Minimum  = apply(harga[, -ncol(harga)], 2, min),
+  Maksimum = apply(harga[, -ncol(harga)], 2, max),
+  Rata_rata= apply(harga[, -ncol(harga)], 2, mean),
+  Varian   = apply(harga[, -ncol(harga)], 2, var)
+)
+
+stat_deskriptif
+
+############################################################
+# HITUNG RETURN LOG
+############################################################
+return <- diff(log(harga))[-1]
+R_saham  <- return[, colnames(harga)[-ncol(harga)]]
+R_market <- return[, "IHSG"]
+
+############################################################
+# 3.2 UJI ASUMSI SINGLE INDEX MODEL (TABEL 2)
+############################################################
+uji_normalitas <- korelasi_IHSG <- numeric(ncol(R_saham))
+residual_matrix <- matrix(NA, nrow = nrow(R_saham), ncol = ncol(R_saham))
+colnames(residual_matrix) <- colnames(R_saham)
+
+for(i in 1:ncol(R_saham)){
+  model <- lm(R_saham[, i] ~ R_market)
+  res   <- residuals(model)
+  
+  residual_matrix[, i] <- res
+  uji_normalitas[i]    <- lillie.test(res)$p.value
+  korelasi_IHSG[i]     <- cor(res, R_market)
+}
+
+uji_asumsi <- data.frame(
+  Saham = colnames(R_saham),
+  Normalitas = ifelse(uji_normalitas > 0.05, "Memenuhi", "Tidak Memenuhi"),
+  Korelasi_dengan_IHSG = ifelse(abs(korelasi_IHSG) < 0.1, "Memenuhi", "Tidak Memenuhi")
+)
+
+uji_asumsi
+
+############################################################
+# 3.3 SINGLE INDEX MODEL & PORTOFOLIO OPTIMAL
+############################################################
+SIM <- data.frame(
+  Saham = colnames(R_saham),
+  alpha = NA,
+  beta  = NA,
+  sigma_e2 = NA
+)
+
+for(i in 1:ncol(R_saham)){
+  model <- lm(R_saham[, i] ~ R_market)
+  SIM$alpha[i]    <- coef(model)[1]
+  SIM$beta[i]     <- coef(model)[2]
+  SIM$sigma_e2[i] <- var(residuals(model))
+}
+
+# Expected return & ERB
+Rf <- 0.0005   # asumsi risk-free harian
+ER_market <- mean(R_market)
+
+SIM$ER_i <- SIM$alpha + SIM$beta * ER_market
+SIM$ERB  <- (SIM$ER_i - Rf) / SIM$beta
+SIM <- SIM[order(-SIM$ERB), ]
+
+############################################################
+# HITUNG Ai, Bi, Ci
+############################################################
+sigma_M2 <- var(R_market)
+
+SIM$Ai <- ((SIM$ER_i - Rf) * SIM$beta) / SIM$sigma_e2
+SIM$Bi <- (SIM$beta^2) / SIM$sigma_e2
+
+SIM$Ci <- NA
+for(i in 1:nrow(SIM)){
+  SIM$Ci[i] <- (sigma_M2 * sum(SIM$Ai[1:i])) /
+               (1 + sigma_M2 * sum(SIM$Bi[1:i]))
+}
+
+SIM
+
+############################################################
+# CUT-OFF POINT (C*)
+############################################################
+C_star <- max(SIM$Ci[SIM$ERB >= SIM$Ci])
+C_star
+
+############################################################
+# 3.4 BOBOT SAHAM PORTOFOLIO OPTIMAL
+############################################################
+optimal <- SIM[SIM$ERB >= C_star, ]
+
+optimal$Zi <- (optimal$beta / optimal$sigma_e2) *
+               (optimal$ERB - C_star)
+
+optimal$wi <- optimal$Zi / sum(optimal$Zi)
+optimal[, c("Saham","Zi","wi")]
+
+############################################################
+# 3.5 VALUE AT RISK – HISTORICAL SIMULATION
+############################################################
+# Return portofolio
+R_port <- R_saham[, optimal$Saham] %*% optimal$wi
+
+V0 <- 100000000
+alpha <- 0.05
+T <- 1
+
+# VaR Portofolio
+P_alpha_port <- quantile(R_port, probs = alpha)
+VaR_port <- -V0 * P_alpha_port * sqrt(T)
+VaR_port
+
+# VaR masing-masing saham
+VaR_saham <- sapply(optimal$Saham, function(s){
+  P <- quantile(R_saham[, s], probs = alpha)
+  -V0 * P * sqrt(T)
+})
+
+VaR_saham
