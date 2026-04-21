@@ -1,170 +1,314 @@
-############################################################
-# ANALISIS RISIKO PORTOFOLIO OPTIMAL
-# SINGLE INDEX MODEL & VAR HISTORICAL SIMULATION
-# DATA: YAHOO FINANCE (2020–2024)
-############################################################
+---
+title: "Coba-coba"
+author: "Dinda Kusuma Sari"
+date: "2026-03-11"
+output: html_document
+---
 
-rm(list = ls())
+```{r}
+# Impor Data
+DataSaham = read.csv("C:/Skripsi Dinda/Olah Data R/Cobalagidanlagi.csv", 
+                     sep = ";", header = TRUE)
+DataSaham
+Saham = DataSaham[,2:11]
+Saham
+IHSG = DataSaham[,12]
+IHSG
 
-# ==========================================================
-# LIBRARY
-# ==========================================================
-library(quantmod)
-library(tidyverse)
-library(xts)
-library(PerformanceAnalytics)
-library(nortest)
+# Grafik Close Price Saham dan IHSG
+library(ggplot2)
+library(reshape2)
+DataSaham$Date <- as.Date(DataSaham$Date, format="%b %d, %Y")
+Data_long <- melt(DataSaham, id.vars = "Date")
+vars <- unique(Data_long$variable)
+cols <- scales::hue_pal()(length(vars))
+names(cols) <- vars
+cols["IHSG"] <- "black"
+ggplot(Data_long, aes(x=Date, y=value, color=variable, group=variable)) +
+  geom_line() +
+  scale_color_manual(values = cols) +
+  labs(title="Grafik Harga Penutupan Saham dan IHSG",
+       x="Tanggal", y="Harga (IDR)", color="Keterangan") +
+  theme_minimal()
 
-# ==========================================================
-# PARAMETER PENELITIAN
-# ==========================================================
-start_date <- as.Date("2020-01-01")
-end_date   <- as.Date("2024-12-31")
-
-saham <- c("ADRO.JK","ANTM.JK","ASII.JK","BBCA.JK",
-           "BBRI.JK","BBNI.JK","BMRI.JK","TLKM.JK")
-
-market <- "^JKSE"   # IHSG
-
-# ==========================================================
-# AMBIL DATA DARI YAHOO FINANCE
-# ==========================================================
-getSymbols(c(saham, market),
-           src = "yahoo",
-           from = start_date,
-           to   = end_date)
-
-# Ambil closing price
-harga_saham <- do.call(merge, lapply(saham, function(x) Cl(get(x))))
-colnames(harga_saham) <- gsub(".JK","",saham)
-
-harga_IHSG <- Cl(get(market))
-
-# Gabungkan
-harga <- merge(harga_saham, IHSG = harga_IHSG)
-harga <- na.omit(harga)
-
-############################################################
-# 3.1 STATISTIKA DESKRIPTIF (TABEL 1)
-############################################################
+#Statistik Deskriptif
 stat_deskriptif <- data.frame(
-  Saham    = colnames(harga)[-ncol(harga)],
-  Minimum  = apply(harga[, -ncol(harga)], 2, min),
-  Maksimum = apply(harga[, -ncol(harga)], 2, max),
-  Rata_rata= apply(harga[, -ncol(harga)], 2, mean),
-  Varian   = apply(harga[, -ncol(harga)], 2, var)
+  No = 1:ncol(Saham),
+  Kode_Saham = colnames(Saham),
+  Minimum = apply(Saham, 2, min),
+  Maksimum = apply(Saham, 2, max),
+  Rata_rata = round(apply(Saham, 2, mean), 2),
+  Varian = round(apply(Saham, 2, var), 2)
 )
-
 stat_deskriptif
+```
+```{r}
+# Menghitung Return Saham 
+return_saham = diff(log(as.matrix(Saham)))
+return_saham
+colnames(return_saham) = colnames(Saham)
 
-############################################################
-# HITUNG RETURN LOG
-############################################################
-return <- diff(log(harga))[-1]
-R_saham  <- return[, colnames(harga)[-ncol(harga)]]
-R_market <- return[, "IHSG"]
-
-############################################################
-# 3.2 UJI ASUMSI SINGLE INDEX MODEL (TABEL 2)
-############################################################
-uji_normalitas <- korelasi_IHSG <- numeric(ncol(R_saham))
-residual_matrix <- matrix(NA, nrow = nrow(R_saham), ncol = ncol(R_saham))
-colnames(residual_matrix) <- colnames(R_saham)
-
-for(i in 1:ncol(R_saham)){
-  model <- lm(R_saham[, i] ~ R_market)
-  res   <- residuals(model)
-  
-  residual_matrix[, i] <- res
-  uji_normalitas[i]    <- lillie.test(res)$p.value
-  korelasi_IHSG[i]     <- cor(res, R_market)
-}
-
-uji_asumsi <- data.frame(
-  Saham = colnames(R_saham),
-  Normalitas = ifelse(uji_normalitas > 0.05, "Memenuhi", "Tidak Memenuhi"),
-  Korelasi_dengan_IHSG = ifelse(abs(korelasi_IHSG) < 0.1, "Memenuhi", "Tidak Memenuhi")
+#Menghitung Return Pasar 
+return_pasar <- (IHSG[-1] - IHSG[-length(IHSG)]) / IHSG[-length(IHSG)]
+ER_market <- mean(return_pasar)
+var_market <- var(return_pasar)
+tabel_pasar <- data.frame(
+  Keterangan = c("Expected Return Pasar", "Varians Return Pasar"),
+  Nilai = c(ER_market, var_market)
 )
-
-uji_asumsi
-
-############################################################
-# 3.3 SINGLE INDEX MODEL & PORTOFOLIO OPTIMAL
-############################################################
-SIM <- data.frame(
-  Saham = colnames(R_saham),
-  alpha = NA,
-  beta  = NA,
-  sigma_e2 = NA
+tabel_pasar
+```
+```{r}
+# Menghitung Kovarian 
+cov_saham_pasar <- sapply(1:ncol(return_saham), function(i){
+  cov(return_saham[,i], return_pasar)
+})
+names(cov_saham_pasar) <- colnames(return_saham)
+tabel_cov <- data.frame(
+  Saham = colnames(return_saham),
+  Covariance = cov_saham_pasar
 )
+tabel_cov
+```
+```{r}
+# Menghitung Expected Return Saham
+ER_saham <- colMeans(return_saham)
+tabel_ER_saham <- data.frame(
+  Saham = colnames(return_saham),
+  Expected_Return = ER_saham
+)
+tabel_ER_saham
+```
+```{r}
+# Menghitung Beta dan Alpha
+beta <- cov_saham_pasar / var_market
+alpha <- ER_saham - beta * ER_market
+tabel_alpha_beta <- data.frame(
+  Saham = colnames(return_saham),
+  Beta = beta,
+  Alpha = alpha
+)
+tabel_alpha_beta
+```
+```{r}
+# Pembentukan Model Single Index Model
+model_SIM <- lapply(1:ncol(return_saham), function(i){
+  lm(return_saham[,i] ~ return_pasar)
+})
+model_SIM
+```
+```{r}
+# Menghitung Parameter Asumsi SIM
+residual_saham <- sapply(model_SIM, residuals)
+colnames(residual_saham) <- colnames(return_saham)
+residual_saham
 
-for(i in 1:ncol(R_saham)){
-  model <- lm(R_saham[, i] ~ R_market)
-  SIM$alpha[i]    <- coef(model)[1]
-  SIM$beta[i]     <- coef(model)[2]
-  SIM$sigma_e2[i] <- var(residuals(model))
-}
+# Varians Residual
+var_residual <- apply(residual_saham, 2, var)
+tabel_var_residual <- data.frame(
+  Saham = colnames(residual_saham),
+  Varian_Residual = var_residual
+)
+tabel_var_residual
 
-# Expected return & ERB
-Rf <- 0.0005   # asumsi risk-free harian
-ER_market <- mean(R_market)
+# Kovarian antar residual saham
+cov_residual <- cov(residual_saham)
+library(reshape2)
+tabel_cov_residual <- melt(cov_residual)
+colnames(tabel_cov_residual) <- c("Saham1", "Saham2", "Covariance")
+tabel_cov_residual
 
-SIM$ER_i <- SIM$alpha + SIM$beta * ER_market
-SIM$ERB  <- (SIM$ER_i - Rf) / SIM$beta
-SIM <- SIM[order(-SIM$ERB), ]
+# Kovarian residual dengan return pasar
+cov_residual_pasar <- sapply(1:ncol(residual_saham), function(i){
+  cov(residual_saham[,i], return_pasar)
+})
+tabel_cov_pasar <- data.frame(
+  Saham = colnames(residual_saham),
+  Covariance = cov_residual_pasar
+)
+tabel_cov_pasar
+```
+```{r}
+# Uji Asumsi Single Index Model
 
-############################################################
-# HITUNG Ai, Bi, Ci
-############################################################
-sigma_M2 <- var(R_market)
+# 1. Residual Berdistribusi Normal
+library(nortest)
+pvalue_normalitas <- sapply(1:ncol(residual_saham), function(i){
+  lillie.test(residual_saham[,i])$p.value
+})
+normalitas <- ifelse(pvalue_normalitas > 0.05,
+                     "Memenuhi",
+                     "Tidak Memenuhi")
 
-SIM$Ai <- ((SIM$ER_i - Rf) * SIM$beta) / SIM$sigma_e2
-SIM$Bi <- (SIM$beta^2) / SIM$sigma_e2
-
-SIM$Ci <- NA
-for(i in 1:nrow(SIM)){
-  SIM$Ci[i] <- (sigma_M2 * sum(SIM$Ai[1:i])) /
-               (1 + sigma_M2 * sum(SIM$Bi[1:i]))
-}
-
-SIM
-
-############################################################
-# CUT-OFF POINT (C*)
-############################################################
-C_star <- max(SIM$Ci[SIM$ERB >= SIM$Ci])
-C_star
-
-############################################################
-# 3.4 BOBOT SAHAM PORTOFOLIO OPTIMAL
-############################################################
-optimal <- SIM[SIM$ERB >= C_star, ]
-
-optimal$Zi <- (optimal$beta / optimal$sigma_e2) *
-               (optimal$ERB - C_star)
-
-optimal$wi <- optimal$Zi / sum(optimal$Zi)
-optimal[, c("Saham","Zi","wi")]
-
-############################################################
-# 3.5 VALUE AT RISK – HISTORICAL SIMULATION
-############################################################
-# Return portofolio
-R_port <- R_saham[, optimal$Saham] %*% optimal$wi
-
-V0 <- 100000000
-alpha <- 0.05
-T <- 1
-
-# VaR Portofolio
-P_alpha_port <- quantile(R_port, probs = alpha)
-VaR_port <- -V0 * P_alpha_port * sqrt(T)
-VaR_port
-
-# VaR masing-masing saham
-VaR_saham <- sapply(optimal$Saham, function(s){
-  P <- quantile(R_saham[, s], probs = alpha)
-  -V0 * P * sqrt(T)
+# 2. Kovarian antar residual bernilai nol
+korelasi_residual <- sapply(1:ncol(residual_saham), function(i){
+  hasil <- sapply(1:ncol(residual_saham), function(j){
+    if(i == j){
+      return(NA)
+    } else{
+      cor.test(residual_saham[,i], residual_saham[,j])$p.value
+    }
+  })
+  if(any(hasil < 0.05, na.rm = TRUE)){
+    "Tidak Memenuhi"
+  } else{
+    "Memenuhi"
+  }
 })
 
-VaR_saham
+# 3. Kovarian antar residual saham dengan return pasar
+korelasi_IHSG <- sapply(1:ncol(residual_saham), function(i){
+  test <- cor.test(residual_saham[,i], return_pasar)
+  if(test$p.value > 0.05){
+    "Memenuhi"
+  } else{
+    "Tidak Memenuhi"
+  }
+})
+
+# Tabel Uji Asumsi
+Uji_Asumsi <- data.frame(
+  No = 1:ncol(residual_saham),
+  Saham = colnames(residual_saham),
+  Normalitas = normalitas,
+  Korelasi_Antar_Residual = korelasi_residual,
+  Korelasi_Residual_IHSG = korelasi_IHSG,
+  row.names = NULL
+)
+Uji_Asumsi
+```
+```{r}
+# Tabel Saham yang lolos 3 Uji Asumsi SIM
+library(dplyr)
+library(tidyverse)
+saham_lolos <- Uji_Asumsi %>%
+  filter(Normalitas == "Memenuhi",
+         Korelasi_Antar_Residual == "Memenuhi",
+         Korelasi_Residual_IHSG == "Memenuhi")
+saham_lolos
+```
+```{r}
+# Tabel Nilai ERB
+kode_lolos <- saham_lolos$Saham
+return_lolos <- return_saham[, kode_lolos]
+ER <- colMeans(return_lolos)
+RBR <- 0.000216
+beta_lolos <- beta[match(kode_lolos, names(beta))]
+ERB <- (ER - RBR) / beta_lolos
+tabel_ERB <- data.frame(
+  Saham = kode_lolos,
+  ERB = ERB,
+  Beta = beta_lolos,
+  ER = ER
+)
+tabel_ERB
+
+# Tabel Nilai ERB, Beta, dan Expected Return
+ERB_aja <- data.frame(
+  Saham = kode_lolos,
+  ERB = ERB
+)
+ERB_aja
+```
+```{r}
+# Pengurutan Nilai ERB Terbesar ke Terkecil
+tabel_ERB <- tabel_ERB %>%
+  arrange(desc(ERB))
+tabel_ERB
+```
+```{r}
+# Perhitungan Nilai Ai dan Bi
+var_residual <- apply(residual_saham[, kode_lolos], 2, var)
+tabel_ERB$var_residual <- var_residual[tabel_ERB$Saham]
+tabel_ERB$Ai <- ((tabel_ERB$ER - RBR) * tabel_ERB$Beta) / tabel_ERB$var_residual
+tabel_ERB$Bi <- (tabel_ERB$Beta^2) / tabel_ERB$var_residual
+tabel_ERB
+```
+```{r}
+# Perhitungan Nilai Ci
+var_market <- var(return_pasar)
+Ci <- c()
+for(i in 1:nrow(tabel_ERB)){
+  sumA <- sum(tabel_ERB$Ai[1:i])
+  sumB <- sum(tabel_ERB$Bi[1:i])
+  Ci[i] <- (var_market * sumA) / (1 + var_market * sumB)
+}
+tabel_ERB$Ci <- Ci
+tabel_ERB
+```
+```{r}
+# Penentuan Cut off-point (C*)
+C_star <- max(tabel_ERB$Ci[tabel_ERB$ERB >= tabel_ERB$Ci])
+C_star
+portofolio_optimal <- tabel_ERB %>%
+  filter(ERB >= C_star)
+portofolio_optimal
+```
+```{r}
+# Perhitungan Bobot
+portofolio_optimal$Zi <- (portofolio_optimal$Beta / portofolio_optimal$var_residual) *
+                        (portofolio_optimal$ERB - C_star)
+total_Zi <- sum(portofolio_optimal$Zi)
+portofolio_optimal$wi <- portofolio_optimal$Zi / total_Zi
+tabel_bobot <- data.frame(
+  No = 1:nrow(portofolio_optimal),
+  Saham = portofolio_optimal$Saham,
+  Zi = round(portofolio_optimal$Zi, 4),
+  wi = round(portofolio_optimal$wi, 4)
+)
+tabel_bobot
+```
+```{r}
+# Perhitungan Persentil 
+V0 <- 100000000   
+alpha <- 0.05     
+return_portofolio <- as.matrix(return_lolos[, portofolio_optimal$Saham]) %*% 
+                     portofolio_optimal$wi
+return_portofolio <- as.vector(return_portofolio)
+P_alpha <- quantile(return_portofolio, probs = 0.05)
+P_alpha
+```
+```{r}
+# VaR Portofolio 
+T_horizon <- c(1, 5, 21, 252)
+VaR <- -V0 * P_alpha * sqrt(T_horizon)
+VaR_Portofolio <- data.frame(
+  Horizon = c("1 Hari", "5 Hari (1 Minggu)", "21 Hari (1 Bulan)", "252 Hari (1 Tahun)"),
+  T = T_horizon,
+  VaR = round(VaR, 0)
+)
+VaR_Portofolio
+```
+```{r}
+# Persentil Tiap Saham pada Portofolio Optimal
+return_optimal <- return_saham[, portofolio_optimal$Saham, drop = FALSE]
+persentil_saham <- apply(return_optimal, 2, function(x){
+  quantile(x, probs = alpha, na.rm = TRUE)
+})
+tabel_persentil <- data.frame(
+  No = 1:length(persentil_saham),
+  Saham = names(persentil_saham),
+  Persentil = round(persentil_saham, 4)
+)
+tabel_persentil
+```
+```{r}
+# VaR Saham
+T_horizon <- c(1, 5, 21, 252)
+VaR_saham <- sapply(T_horizon, function(T){
+  -V0 * persentil_saham * sqrt(T)
+})
+format_rp <- function(x){
+  paste0("Rp ", format(round(x,0), big.mark = ".", decimal.mark = ","))
+}
+VaR_Saham <- data.frame(
+  No = 1:length(persentil_saham),
+  Saham = names(persentil_saham),
+  "1 Hari" = format_rp(VaR_saham[,1]),
+  "5 Hari" = format_rp(VaR_saham[,2]),
+  "21 Hari" = format_rp(VaR_saham[,3]),
+  "252 Hari" = format_rp(VaR_saham[,4]),
+  check.names = FALSE   
+)
+VaR_Saham
+```
